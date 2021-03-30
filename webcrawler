@@ -5,10 +5,10 @@ from html.parser import HTMLParser
 import sys
 from urllib.parse import urlparse
 
-loginUrl = 'http://fring.ccs.neu.edu/accounts/login/?next=/fakebook/'
+loginUrl = 'http://webcrawler-site.ccs.neu.edu/accounts/login/?next=/fakebook/'
 
-csrfValue = None
-
+csrfValue = ""
+sessionId = ""
 class MyHTMLParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         print("Start tag:", tag)
@@ -16,38 +16,51 @@ class MyHTMLParser(HTMLParser):
         for attr in attrs:
             print("     attr:", attr)
 
-    def handle_endtag(self, tag):
-        print("End tag  :", tag)
+   # def handle_endtag(self, tag):
+        #print("End tag  :", tag)
 
-    def handle_data(self, data):
-        print("Data     :", data)
+   # def handle_data(self, data):
+        #print("Data     :", data)
 
-    def handle_comment(self, data):
-        print("Comment  :", data)
+   # def handle_comment(self, data):
+        #print("Comment  :", data)
 
     def handle_charref(self, name):
         if name.startswith('x'):
             c = chr(int(name[1:], 16))
         else:
             c = chr(int(name))
-        print("Num ent  :", c)
+        #print("Num ent  :", c)
 
-    def handle_decl(self, data):
-        print("Decl     :", data)
+   # def handle_decl(self, data):
+        #print("Decl     :", data)
     
     def getCsrf(self, tag, attrs):
+        global csrfValue
         if ('name', 'csrfmiddlewaretoken') in attrs:
             try:
-                csrfValue = attrs[2]
+                csrfValue = attrs[2][1]
                 print("csrfValue :", csrfValue)
             except:
-                print("Could not find CSRF value")
+               # print("Could not find CSRF value")
                 sys.exit(1)
 
 parser = MyHTMLParser()
 
+
+def getSocket(host):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.connect((host, 80))
+        return s
+    except socket.error:
+        print("Something went wrong with connecting. Double check that your url is accurate")
+        sys.exit(1)
+        
 # Function to login to fakebook
 def loginToFakebook(args):
+    global csrfValue
+    global sessionId
     #setup the two params given
     username = args.username
     password = args.password
@@ -58,21 +71,71 @@ def loginToFakebook(args):
     path = loginUrlParts.path
     
     # connect to socket
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.connect((host, 80))
-    except socket.error:
-        print("Something went wrong with connecting. Double check that your url is accurate")
-        sys.exit(1)
+    s = getSocket(host)
     print(loginUrlParts)
     
     request = ("GET " + path + " HTTP/1.1\r\nHOST: " + host + "\r\n\r\n")
     s.sendall(request.encode(encoding='UTF-8'))
-    serverResponse = getServerMessage(s)
-    parser.feed(serverResponse)
-    # responseLines = serverResponse.splitlines()
+    serverGetResponse = getServerMessage(s)
+    # sets the CSRF Value
+    parser.feed(serverGetResponse)
+    print("FINALCSRF:" + csrfValue)
+    loginFormData = ("username=" + username + "&password=" + password + "&csrfmiddlewaretoken=" + csrfValue + "&next=\n\n")
+    loginPost = """
+POST /accounts/login/ HTTP/1.1
+Host: webcrawler-site.ccs.neu.edu
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:87.0) Gecko/20100101 Firefox/87.0
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate
+Referer: http://webcrawler-site.ccs.neu.edu/accounts/login/?next=/fakebook/
+Content-Type: application/x-www-form-urlencoded
+Origin: http://webcrawler-site.ccs.neu.edu
+Connection: keep-alive
+Cookie: csrftoken={}
+Upgrade-Insecure-Requests: 1
+""".format(csrfValue)
     
+    # ("POST /accounts/login/ HTTP/1.1\n" +\
+    # "Host: " + host + "\n"
+    # "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:87.0) Gecko/20100101 Firefox/87.0\n" +
+    # "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\n" +
+    # "Accept-Language: en-US,en;q=0.5\n" +
+    # "Accept-Encoding: gzip, deflate\n" +
+    # "Referer: http://webcrawler-site.ccs.neu.edu/accounts/login/\n" +
+    # "Content-Type: application/x-www-form-urlencoded\n" +
+    # "Content-Length: 134\n" +
+    # "Origin: http://webcrawler-site.ccs.neu.edu\n" +
+    # "Connection: keep-alive\n" +
+    # "Cookie: csrftoken=" + csrfValue + "\n" +
+    # "Upgrade-Insecure-Requests: 1\n\n" + loginFormData)
+    contentLength = str(len(loginFormData))
+    loginPost += "Content-Length: " + contentLength + "\n\n"
+    loginPost += loginFormData
+    print(loginPost)
+    sock = getSocket(host)
+    sock.sendall(loginPost.encode(encoding='UTF-8'))
+    serverLoginResponse = getServerMessage(sock)
+    
+    print(serverLoginResponse)
+    responseLines = serverLoginResponse.splitlines()
+    
+    sessionIdLine = responseLines[14]
+    sessionIdStartIndex = sessionIdLine.find('sessionid')
+    # jump to index where sessionId start
+    sessionIdStartIndex += 10
+    sessionIdEndIndex = sessionIdLine.find('; expires')
+    
+    sessionId = sessionIdLine[sessionIdStartIndex:sessionIdEndIndex]
+    print(sessionId)
+    
+    #crawlFakebook()
+    # print("response" + response)
     # print(responseLines)
+    
+# After logging in, start crawling fakebook
+#def crawlFakebook():
+    
     
 # Gets the response from the server
 def getServerMessage(s):
