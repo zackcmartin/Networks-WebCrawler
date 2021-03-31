@@ -4,23 +4,47 @@ import socket
 from html.parser import HTMLParser
 import sys
 from urllib.parse import urlparse
+import time
 
 loginUrl = 'http://webcrawler-site.ccs.neu.edu/accounts/login/?next=/fakebook/'
 
 csrfValue = ""
 sessionId = ""
+host = ""
+linksToSee = []
+seenLinks = []
+secretFlags = []
+startRecording = False
+
 class MyHTMLParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
-        print("Start tag:", tag)
-        self.getCsrf(tag, attrs)
-        for attr in attrs:
-            print("     attr:", attr)
+        global host
+        global linksToSee
+        global seenLinks
+        global startRecording
+       # print("Start tag:", tag)
+        if ('name', 'csrfmiddlewaretoken') in attrs:
+            self.getCsrf(tag, attrs)
+        if tag == "a" and attrs[0][1][0] == "/" and startRecording:
+            foundLink = attrs[0][1]
+         #   print("foundLink!")
+         #   print(foundLink)
+            if foundLink not in linksToSee and foundLink not in seenLinks:
+             #   print("adding Link")
+                linksToSee.append(foundLink)
+        #for attr in attrs:
+         #   print("     attr:", attr)
 
    # def handle_endtag(self, tag):
         #print("End tag  :", tag)
 
-   # def handle_data(self, data):
+    def handle_data(self, data):
         #print("Data     :", data)
+        if "FLAG:" in data:
+            secretFlag = data[6:]
+#            print("SECRET FLAG!!!")
+#            print(data)
+            secretFlags.append(secretFlag)
 
    # def handle_comment(self, data):
         #print("Comment  :", data)
@@ -37,13 +61,12 @@ class MyHTMLParser(HTMLParser):
     
     def getCsrf(self, tag, attrs):
         global csrfValue
-        if ('name', 'csrfmiddlewaretoken') in attrs:
-            try:
-                csrfValue = attrs[2][1]
-                print("csrfValue :", csrfValue)
-            except:
-               # print("Could not find CSRF value")
-                sys.exit(1)
+        try:
+            csrfValue = attrs[2][1]
+          #  print("csrfValue :", csrfValue)
+        except:
+            # print("Could not find CSRF value")
+            sys.exit(1)
 
 parser = MyHTMLParser()
 
@@ -61,6 +84,8 @@ def getSocket(host):
 def loginToFakebook(args):
     global csrfValue
     global sessionId
+    global host
+    global startRecording
     #setup the two params given
     username = args.username
     password = args.password
@@ -72,14 +97,17 @@ def loginToFakebook(args):
     
     # connect to socket
     s = getSocket(host)
-    print(loginUrlParts)
+   # print(loginUrlParts)
     
-    request = ("GET " + path + " HTTP/1.1\r\nHOST: " + host + "\r\n\r\n")
+    request = ("GET " + path + " HTTP/1.1\r\nHOST: " + host + "\r\nConnection: keep-alive\r\n\r\n")
     s.sendall(request.encode(encoding='UTF-8'))
-    serverGetResponse = getServerMessage(s)
+    time.sleep(0.5)
+    serverGetResponse = s.recv(20000).decode('ascii')
+#    print(serverGetResponse)
     # sets the CSRF Value
     parser.feed(serverGetResponse)
-    print("FINALCSRF:" + csrfValue)
+    startRecording = True
+#    print("FINALCSRF:" + csrfValue)
     loginFormData = ("username=" + username + "&password=" + password + "&csrfmiddlewaretoken=" + csrfValue + "&next=\n\n")
     loginPost = """
 POST /accounts/login/ HTTP/1.1
@@ -112,12 +140,14 @@ Upgrade-Insecure-Requests: 1
     contentLength = str(len(loginFormData))
     loginPost += "Content-Length: " + contentLength + "\n\n"
     loginPost += loginFormData
-    print(loginPost)
-    sock = getSocket(host)
-    sock.sendall(loginPost.encode(encoding='UTF-8'))
-    serverLoginResponse = getServerMessage(sock)
+    #print(loginPost)
+    #sock = getSocket(host)
+    #print("sock!!")
+    #print(sock)
+    s.sendall(loginPost.encode(encoding='UTF-8'))
+    serverLoginResponse = s.recv(20000).decode('ascii')
     
-    print(serverLoginResponse)
+   # print(serverLoginResponse)
     responseLines = serverLoginResponse.splitlines()
     
     sessionIdLine = responseLines[14]
@@ -127,27 +157,81 @@ Upgrade-Insecure-Requests: 1
     sessionIdEndIndex = sessionIdLine.find('; expires')
     
     sessionId = sessionIdLine[sessionIdStartIndex:sessionIdEndIndex]
-    print(sessionId)
+    #print(sessionId)
     
-    #crawlFakebook()
+    linksToSee.append("/fakebook/")
+    crawlFakebook(s)
     # print("response" + response)
     # print(responseLines)
     
 # After logging in, start crawling fakebook
-#def crawlFakebook():
+def crawlFakebook(s):
+    global linksToSee
+    global seenLinks
+#    print("crawling!")
+    while(linksToSee and len(secretFlags) < 5):
+        # print(linksToSee)
+        link = linksToSee.pop()
+        print(link)
+        if link not in seenLinks and link != "" and link is not None:
+            serverGetResponse = sendGetForCrawl(s, link)
+            print(serverGetResponse)
+            #status = int(serverGetResponse[9:12])
+            #print(status)
+            if "Connection: close" in serverGetResponse:
+                linksToSee.append(link)
+                s = getSocket(host)
+            elif "HTTP/1.1 301" in serverGetResponse or "HTTP/1.1 302" in serverGetResponse:
+                # Find request using location
+                locationLine = serverGetResponse.splitlines()
+                location = locationLine[6][10:]
+                print("LOCATION!!!!!!!!!")
+#                print(location)
+                seenLinks.append(link)
+                linksToSee.append(location)
+            elif "HTTP/1.1 403" in serverGetResponse or "HTTP/1.1 404" in serverGetResponse:
+                # abandon URL
+                seenLinks.append(link)
+            elif "HTTP/1.1 500" in serverGetResponse:
+                # repeat until it works
+                linksToSee.append(link)
+            else:
+                # normal, everythings fine
+                parser.feed(serverGetResponse)
+                seenLinks.append(link)
+    print("THIS IS THE END")
+    print(linksToSee)
+    print(secretFlags)
+
+def sendGetForCrawl(s, link):
+    global csrfValue
+    global sessionId
+    global host
+#    print("Sending get!")
+#    print(link)
+    #print(sock)
+    # sock = getSocket(host)
+    request = ("GET " + link + " HTTP/1.1\r\nHOST: " + host + "\r\nCookie: csrftoken=" + csrfValue + "; sessionid=" + sessionId + "\r\nConnection: keep-alive\r\n\r\n")
+   #print(request)
+    s.sendall(request.encode(encoding='UTF-8'))
+    #time.sleep(0.1)
+    serverGetResponse = s.recv(1000000).decode('ascii')
+    if "<html>" in serverGetResponse:
+        while "</html>" not in serverGetResponse:
+            serverGetResponse += s.recv(1000000).decode('ascii')
+    return serverGetResponse
     
-    
-# Gets the response from the server
-def getServerMessage(s):
-    finalResponse = ''
-    while True:
-        partOfResponse = s.recv(8192).decode('ascii')
-        if len(partOfResponse) == 0:
-            break
-        finalResponse += partOfResponse
-        # looks for if the string contains the "\n" 
+# # Gets the response from the server
+# def getServerMessage(s):
+#     finalResponse = ''
+#     while True:
+#         partOfResponse = s.recv(100000).decode('ascii')
+#         if len(partOfResponse) == 0:
+#             break
+#         finalResponse += partOfResponse
+#         # looks for if the string contains the "\n" 
         
-    return finalResponse
+#     return finalResponse
     
 # parses the input recieved
 def parseInput():
