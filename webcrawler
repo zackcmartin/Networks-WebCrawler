@@ -172,10 +172,10 @@ def crawlFakebook(s):
     while(linksToSee and len(secretFlags) < 5):
         # print(linksToSee)
         link = linksToSee.pop()
-        print(link)
+        #print(link)
         if link not in seenLinks and link != "" and link is not None:
             serverGetResponse = sendGetForCrawl(s, link)
-            print(serverGetResponse)
+            #print(serverGetResponse)
             #status = int(serverGetResponse[9:12])
             #print(status)
             if "Connection: close" in serverGetResponse:
@@ -200,7 +200,7 @@ def crawlFakebook(s):
                 parser.feed(serverGetResponse)
                 seenLinks.append(link)
     print("THIS IS THE END")
-    print(linksToSee)
+    #print(linksToSee)
     print(secretFlags)
 
 def sendGetForCrawl(s, link):
